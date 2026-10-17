@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_id": "synthetic-week1-v1",
+  "graph_model_version": "demo-graph-v1",
+  "patched_finding_ids": [],
+  "entry_point_ids": [
+    "INTERNET"
+  ],
+  "target_asset_ids": [
+    "DB01"
+  ],
+  "paths": [
+    {
+      "path_id": "path:R01>R02>R03",
+      "target_asset_id": "DB01",
+      "asset_ids": [
+        "INTERNET",
+        "WEB01",
+        "APP01",
+        "DB01"
+      ],
+      "rule_ids": [
+        "R01",
+        "R02",
+        "R03"
+      ],
+      "finding_ids": [
+        "F01",
+        "F02"
+      ]
+    }
+  ],
+  "search_complete": true,
+  "warnings": []
+}

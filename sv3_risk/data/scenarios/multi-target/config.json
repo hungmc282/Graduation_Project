@@ -1,0 +1,19 @@
+{
+  "graph_config": {
+    "model_version": "reference-lab-v1",
+    "entry_point_ids": [
+      "INTERNET"
+    ],
+    "target_asset_ids": [
+      "DB01",
+      "DB02"
+    ],
+    "max_depth": 12,
+    "max_paths": 10000
+  },
+  "risk_config": {
+    "model_version": "context-path-v1",
+    "ranking_metric": "remediation_impact",
+    "parameters": {}
+  }
+}

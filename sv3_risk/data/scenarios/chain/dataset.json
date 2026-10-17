@@ -1,0 +1,213 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_id": "chain-v1",
+  "created_at": "2026-10-17T14:18:48Z",
+  "source": "synthetic",
+  "assets": [
+    {
+      "asset_id": "WEB01",
+      "name": "WEB01",
+      "asset_type": "web",
+      "internet_facing": true,
+      "criticality": 3,
+      "sensitive_data": false
+    },
+    {
+      "asset_id": "APP01",
+      "name": "APP01",
+      "asset_type": "application",
+      "internet_facing": false,
+      "criticality": 4,
+      "sensitive_data": false
+    },
+    {
+      "asset_id": "DB01",
+      "name": "DB01",
+      "asset_type": "database",
+      "internet_facing": false,
+      "criticality": 5,
+      "sensitive_data": true
+    },
+    {
+      "asset_id": "TEST01",
+      "name": "TEST01",
+      "asset_type": "test",
+      "internet_facing": true,
+      "criticality": 1,
+      "sensitive_data": false
+    }
+  ],
+  "services": [
+    {
+      "service_id": "SVC-WEB01",
+      "asset_id": "WEB01",
+      "protocol": "tcp",
+      "port": 443,
+      "product": null,
+      "product_version": null
+    },
+    {
+      "service_id": "SVC-APP01",
+      "asset_id": "APP01",
+      "protocol": "tcp",
+      "port": 443,
+      "product": null,
+      "product_version": null
+    },
+    {
+      "service_id": "SVC-DB01",
+      "asset_id": "DB01",
+      "protocol": "tcp",
+      "port": 5432,
+      "product": null,
+      "product_version": null
+    },
+    {
+      "service_id": "SVC-TEST01",
+      "asset_id": "TEST01",
+      "protocol": "tcp",
+      "port": 443,
+      "product": null,
+      "product_version": null
+    }
+  ],
+  "findings": [
+    {
+      "finding_id": "F01",
+      "asset_id": "WEB01",
+      "service_id": "SVC-WEB01",
+      "vulnerability_id": "DEMO-A",
+      "cvss_score": 7.5,
+      "epss_probability": 0.8,
+      "is_kev": true,
+      "source": "synthetic",
+      "evidence": [
+        "SYNTHETIC: all severity, EPSS, KEV and exploit assumptions are hand-authored test inputs, not live threat intelligence."
+      ],
+      "observed_at": "2026-10-17T14:18:48Z",
+      "enriched_at": "2026-10-17T14:18:48Z"
+    },
+    {
+      "finding_id": "F02",
+      "asset_id": "APP01",
+      "service_id": "SVC-APP01",
+      "vulnerability_id": "DEMO-B",
+      "cvss_score": 8.0,
+      "epss_probability": 0.6,
+      "is_kev": false,
+      "source": "synthetic",
+      "evidence": [
+        "SYNTHETIC: all severity, EPSS, KEV and exploit assumptions are hand-authored test inputs, not live threat intelligence."
+      ],
+      "observed_at": "2026-10-17T14:18:48Z",
+      "enriched_at": "2026-10-17T14:18:48Z"
+    },
+    {
+      "finding_id": "F03",
+      "asset_id": "TEST01",
+      "service_id": "SVC-TEST01",
+      "vulnerability_id": "DEMO-C",
+      "cvss_score": 9.8,
+      "epss_probability": 0.95,
+      "is_kev": true,
+      "source": "synthetic",
+      "evidence": [
+        "SYNTHETIC: all severity, EPSS, KEV and exploit assumptions are hand-authored test inputs, not live threat intelligence."
+      ],
+      "observed_at": "2026-10-17T14:18:48Z",
+      "enriched_at": "2026-10-17T14:18:48Z"
+    }
+  ],
+  "connections": [
+    {
+      "connection_id": "C01",
+      "source_asset_id": "INTERNET",
+      "target_asset_id": "WEB01",
+      "target_service_id": "SVC-WEB01",
+      "allowed": true,
+      "evidence": [
+        "Giả định synthetic: kết nối và điều kiện khai thác được cho phép trong lab."
+      ]
+    },
+    {
+      "connection_id": "C02",
+      "source_asset_id": "WEB01",
+      "target_asset_id": "APP01",
+      "target_service_id": "SVC-APP01",
+      "allowed": true,
+      "evidence": [
+        "Giả định synthetic: kết nối và điều kiện khai thác được cho phép trong lab."
+      ]
+    },
+    {
+      "connection_id": "C03",
+      "source_asset_id": "APP01",
+      "target_asset_id": "DB01",
+      "target_service_id": null,
+      "allowed": true,
+      "evidence": [
+        "Giả định synthetic: App có quyền truy cập DB sau khi App bị kiểm soát."
+      ]
+    },
+    {
+      "connection_id": "C04",
+      "source_asset_id": "INTERNET",
+      "target_asset_id": "TEST01",
+      "target_service_id": "SVC-TEST01",
+      "allowed": true,
+      "evidence": [
+        "Giả định synthetic: kết nối và điều kiện khai thác được cho phép trong lab."
+      ]
+    }
+  ],
+  "exploit_rules": [
+    {
+      "rule_id": "R01",
+      "source_asset_id": "INTERNET",
+      "target_asset_id": "WEB01",
+      "required_finding_id": "F01",
+      "required_state": "external",
+      "resulting_state": "controlled",
+      "rule_type": "exploit",
+      "evidence": [
+        "Giả định synthetic: kết nối và điều kiện khai thác được cho phép trong lab."
+      ]
+    },
+    {
+      "rule_id": "R02",
+      "source_asset_id": "WEB01",
+      "target_asset_id": "APP01",
+      "required_finding_id": "F02",
+      "required_state": "controlled",
+      "resulting_state": "controlled",
+      "rule_type": "exploit",
+      "evidence": [
+        "Giả định synthetic: kết nối và điều kiện khai thác được cho phép trong lab."
+      ]
+    },
+    {
+      "rule_id": "R03",
+      "source_asset_id": "APP01",
+      "target_asset_id": "DB01",
+      "required_finding_id": null,
+      "required_state": "controlled",
+      "resulting_state": "accessible",
+      "rule_type": "trust",
+      "evidence": [
+        "Giả định synthetic: App có quyền truy cập DB sau khi App bị kiểm soát."
+      ]
+    },
+    {
+      "rule_id": "R04",
+      "source_asset_id": "INTERNET",
+      "target_asset_id": "TEST01",
+      "required_finding_id": "F03",
+      "required_state": "external",
+      "resulting_state": "controlled",
+      "rule_type": "exploit",
+      "evidence": [
+        "Giả định synthetic: kết nối và điều kiện khai thác được cho phép trong lab."
+      ]
+    }
+  ]
+}

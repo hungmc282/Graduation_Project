@@ -1,0 +1,19 @@
+{
+  "dataset_id": "multi-target-v1",
+  "source": "synthetic",
+  "segments": {
+    "dmz": [
+      "WEB01",
+      "TEST01"
+    ],
+    "application": [
+      "APP01",
+      "APP02"
+    ],
+    "data": [
+      "DB01",
+      "DB02"
+    ]
+  },
+  "note": "Segment labels are contextual metadata, not automatic exploit permissions."
+}
