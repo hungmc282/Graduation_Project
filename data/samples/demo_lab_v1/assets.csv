@@ -1,0 +1,5 @@
+asset_id,name,asset_type,internet_facing,criticality,sensitive_data,addresses,subnet
+WEB01,Web Server,web_server,true,3,false,10.0.1.10,10.0.1.0/24
+APP01,Application Server,application_server,false,4,false,10.0.2.10,10.0.2.0/24
+DB01,Database Server,database_server,false,5,true,10.0.3.10,10.0.3.0/24
+TEST01,Isolated Test Server,test_server,false,1,false,10.0.4.10,10.0.4.0/24
