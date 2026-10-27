@@ -11,6 +11,7 @@ import pytest
 
 from common.errors import ContractError, InvalidReferenceError, ResourceNotFoundError
 from sv1_data.enrichment.service import EPSS_CACHE_NAME, KEV_CACHE_NAME
+from sv1_data.history import ScanHistory
 from sv1_data.pipeline import main, run_pipeline_from_file
 from sv1_data.service import load_dataset
 
@@ -303,3 +304,43 @@ def test_command_line_success_and_failure(root: Path, capsys: pytest.CaptureFixt
 
     assert main([str(root / "no-config.json")]) == 1
     assert "LỖI" in capsys.readouterr().err
+
+
+def test_history_is_off_by_default(root: Path) -> None:
+    assert run_pipeline_from_file(write_config(root), now=NOW).report["history"] is None
+
+
+def test_history_records_runs_and_reports_changes(root: Path) -> None:
+    config = write_config(root, history_dir="history")
+    first = run_pipeline_from_file(config, now=NOW)
+    assert first.report["history"]["previous_run_id"] is None
+    assert first.report["history"]["diff"] is None
+
+    kev = {
+        **KEV_JSON,
+        "count": 2,
+        "vulnerabilities": [
+            *KEV_JSON["vulnerabilities"],
+            {"cveID": "CVE-2019-10082", "dateAdded": "2026-10-19"},
+        ],
+    }
+    kev_cache = root / "cache" / KEV_CACHE_NAME
+    kev_cache.write_text(json.dumps(kev), encoding="utf-8")
+    set_fresh(kev_cache)
+    second = run_pipeline_from_file(config, now=NOW + timedelta(hours=1))
+    info = second.report["history"]
+    assert info["previous_run_id"] == first.report["history"]["run_id"]
+    assert info["diff"]["newly_kev"] == 1
+    assert info["diff"]["added_findings"] == 0
+    assert info["newly_kev"] == ["WEB01:CVE-2019-10082:libapr1@1.0"]
+    assert len(ScanHistory(root / "history").runs()) == 2
+
+
+def test_rerun_with_identical_input_adds_no_history_entry(root: Path) -> None:
+    config = write_config(root, history_dir="history")
+    run_pipeline_from_file(config, now=NOW)
+    second = run_pipeline_from_file(config, now=NOW)
+    info = second.report["history"]
+    assert info["run_id"] == info["previous_run_id"]
+    assert all(value == 0 for key, value in info["diff"].items() if key != "persisting_findings")
+    assert len(ScanHistory(root / "history").runs()) == 1
