@@ -30,6 +30,8 @@ File cấu hình JSON (đường dẫn tương đối được tính từ thư m
       "history_dir": "history"
     }
 
+`dataset_id` là tên gốc: dataset_id thật được ghép với mã băm nội dung (xem identity.py), nên
+chạy lại cùng dữ liệu cho cùng ID và dữ liệu đổi thì ID đổi.
 `inventory_csv`, `nmap_xml`, `trivy`, `nuclei`, `topology_json` đều tuỳ chọn, cần ít nhất một
 nguồn. `history_dir` (tuỳ chọn) bật lịch sử quét: mỗi lần chạy được lưu lại và báo cáo ghi những
 gì đã thay đổi so với lần chạy trước (xem history.py). `topology_json` do SV2 cung cấp:
@@ -69,6 +71,7 @@ from sv1_data.adapters.nuclei_jsonl import parse_nuclei_jsonl
 from sv1_data.adapters.trivy_json import parse_trivy_json
 from sv1_data.enrichment.service import enrich_findings, load_threat_data
 from sv1_data.history import ScanHistory, diff_datasets
+from sv1_data.identity import content_hash, with_content_id
 from sv1_data.inventory import load_asset_inventory, merge_assets
 from sv1_data.service import save_dataset
 
@@ -297,6 +300,7 @@ def run_pipeline(
         exploit_rules=exploit_rules,
     )
 
+    dataset = with_content_id(dataset, config.dataset_id)  # đổi dữ liệu thì đổi dataset_id
     output_dir = _resolve(base_dir, config.output_dir)
     with _stage(timings, "validate_and_save"):
         dataset_path = save_dataset(dataset, output_dir)  # kiểm tra hợp đồng trước khi ghi
@@ -322,6 +326,8 @@ def run_pipeline(
         "schema_version": dataset.schema_version,
         "created_at": created_at.isoformat(),
         "source": dataset.source,
+        "base_dataset_id": config.dataset_id,
+        "content_sha256": content_hash(dataset),
         "counts": {
             "assets": len(dataset.assets),
             "services": len(dataset.services),

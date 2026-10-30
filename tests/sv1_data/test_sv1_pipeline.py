@@ -424,3 +424,43 @@ def test_nuclei_only_dataset_needs_a_cache_when_enriching(root: Path) -> None:
     )
     with pytest.raises(ContractError):
         run_pipeline_from_file(config, now=NOW)
+
+
+def add_kev_entry(root: Path) -> None:
+    kev = {
+        **KEV_JSON,
+        "count": 2,
+        "vulnerabilities": [
+            *KEV_JSON["vulnerabilities"],
+            {"cveID": "CVE-2019-10082", "dateAdded": "2026-10-19"},
+        ],
+    }
+    cache_file = root / "cache" / KEV_CACHE_NAME
+    cache_file.write_text(json.dumps(kev), encoding="utf-8")
+    set_fresh(cache_file)
+
+
+def test_dataset_id_is_the_base_name_plus_a_content_hash(root: Path) -> None:
+    result = run_pipeline_from_file(write_config(root), now=NOW)
+    assert result.dataset.dataset_id.startswith("test-lab-")
+    assert len(result.dataset.dataset_id) == len("test-lab-") + 12
+    assert result.report["base_dataset_id"] == "test-lab"
+    assert len(result.report["content_sha256"]) == 64
+
+
+def test_same_content_keeps_the_id_even_when_run_at_another_time(root: Path) -> None:
+    config = write_config(root)
+    first = run_pipeline_from_file(config, now=NOW)
+    second = run_pipeline_from_file(config, now=NOW + timedelta(hours=1))
+    assert second.dataset.created_at != first.dataset.created_at
+    assert second.dataset.dataset_id == first.dataset.dataset_id
+    assert second.report["content_sha256"] == first.report["content_sha256"]
+
+
+def test_changed_content_gets_a_new_id(root: Path) -> None:
+    config = write_config(root)
+    first = run_pipeline_from_file(config, now=NOW)
+    add_kev_entry(root)
+    second = run_pipeline_from_file(config, now=NOW)
+    assert second.dataset.dataset_id != first.dataset.dataset_id
+    assert second.report["content_sha256"] != first.report["content_sha256"]

@@ -2,7 +2,8 @@
 
     python -m sv1_data.synthetic --out data/samples/synthetic --seed 42
 
-Cùng `seed` và cùng tham số cho ra cùng một dataset.json (từng byte). Mọi bản ghi mang
+Cùng `seed` và cùng tham số cho ra cùng một dataset.json (từng byte). `dataset_id` gồm tên
+gốc và mã băm nội dung (xem identity.py), nên đổi thuật toán sinh thì ID cũng đổi. Mọi bản ghi mang
 `source = "synthetic"`, mã lỗ hổng dạng `SYN-NNNNN`, nên không thể nhầm với dữ liệu quét thật.
 
 Mô hình:
@@ -38,6 +39,7 @@ from common.schemas import (
     Finding,
     Service,
 )
+from sv1_data.identity import with_content_id
 from sv1_data.service import save_dataset
 
 GENERATOR_VERSION = "1.0"
@@ -165,7 +167,7 @@ def generate_dataset(
                     )
                 )
 
-    return DatasetSnapshot(
+    dataset = DatasetSnapshot(
         schema_version=SCHEMA_VERSION,
         dataset_id=dataset_id or f"synthetic-{n_assets}-seed{seed}",
         created_at=created_at,
@@ -176,6 +178,7 @@ def generate_dataset(
         connections=_make_connections(rng, ids, service_of),
         exploit_rules=[],
     )
+    return with_content_id(dataset)
 
 
 def generate_scenarios(
