@@ -27,14 +27,17 @@ File cấu hình JSON (đường dẫn tương đối được tính từ thư m
       "topology_json": "topology.json",
       "enrich": true,
       "cache_dir": "cache",
-      "history_dir": "history"
+      "history_dir": "history",
+      "database": false
     }
 
 `dataset_id` là tên gốc: dataset_id thật được ghép với mã băm nội dung (xem identity.py), nên
 chạy lại cùng dữ liệu cho cùng ID và dữ liệu đổi thì ID đổi.
 `inventory_csv`, `nmap_xml`, `trivy`, `nuclei`, `topology_json` đều tuỳ chọn, cần ít nhất một
 nguồn. `history_dir` (tuỳ chọn) bật lịch sử quét: mỗi lần chạy được lưu lại và báo cáo ghi những
-gì đã thay đổi so với lần chạy trước (xem history.py). `topology_json` do SV2 cung cấp:
+gì đã thay đổi so với lần chạy trước (xem history.py). `database` (mặc định false) lưu thêm
+snapshot vào CSDL có địa chỉ trong biến môi trường APP_DATABASE_URL (cần chạy migration trước:
+python -m sv1_data.db migrate). `topology_json` do SV2 cung cấp:
 {"connections": [...], "exploit_rules": [...]}.
 Kết quả: `<output_dir>/dataset.json` (DatasetSnapshot hợp lệ) và `<output_dir>/report.json`
 (số lượng, thời gian từng bước, mã băm file đầu vào, phiên bản EPSS/KEV, cảnh báo).
@@ -69,10 +72,12 @@ from common.schemas import (
 from sv1_data.adapters.nmap_xml import parse_nmap_xml
 from sv1_data.adapters.nuclei_jsonl import parse_nuclei_jsonl
 from sv1_data.adapters.trivy_json import parse_trivy_json
+from sv1_data.db import create_db_engine, database_url_from_env
 from sv1_data.enrichment.service import enrich_findings, load_threat_data
 from sv1_data.history import ScanHistory, diff_datasets
 from sv1_data.identity import content_hash, with_content_id
 from sv1_data.inventory import load_asset_inventory, merge_assets
+from sv1_data.repository import DatasetRepository
 from sv1_data.service import save_dataset
 
 REPORT_FILENAME = "report.json"
@@ -108,6 +113,7 @@ class PipelineConfig(BaseModel):
     enrich: bool = True
     cache_dir: str | None = None
     history_dir: str | None = None
+    database: bool = False
 
 
 class _Topology(BaseModel):
@@ -320,6 +326,15 @@ def run_pipeline(
                 "newly_kev": diff.newly_kev if diff else [],
             }
 
+    database_info: dict[str, Any] | None = None
+    with _stage(timings, "database"):
+        if config.database:
+            engine = create_db_engine(database_url_from_env())
+            try:
+                database_info = {"saved": DatasetRepository(engine).save(dataset, now=created_at)}
+            finally:
+                engine.dispose()
+
     timings["total"] = round(time.perf_counter() - total_start, 6)
     report: dict[str, Any] = {
         "dataset_id": dataset.dataset_id,
@@ -341,6 +356,7 @@ def run_pipeline(
         "threat_data": threat_data,
         "enrichment_stats": enrichment_stats,
         "history": history_info,
+        "database": database_info,
         "timings_seconds": timings,
         "warnings": warnings,
     }

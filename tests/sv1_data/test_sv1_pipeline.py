@@ -10,9 +10,11 @@ from typing import Any
 import pytest
 
 from common.errors import ContractError, InvalidReferenceError, ResourceNotFoundError
+from sv1_data.db import DATABASE_URL_ENV, DatabaseError, apply_migrations, create_db_engine
 from sv1_data.enrichment.service import EPSS_CACHE_NAME, KEV_CACHE_NAME
 from sv1_data.history import ScanHistory
 from sv1_data.pipeline import main, run_pipeline_from_file
+from sv1_data.repository import DatasetRepository
 from sv1_data.service import load_dataset
 
 NOW = datetime(2026, 10, 19, 12, 0, tzinfo=UTC)
@@ -464,3 +466,45 @@ def test_changed_content_gets_a_new_id(root: Path) -> None:
     second = run_pipeline_from_file(config, now=NOW)
     assert second.dataset.dataset_id != first.dataset.dataset_id
     assert second.report["content_sha256"] != first.report["content_sha256"]
+
+
+def database_engine(root: Path, monkeypatch: pytest.MonkeyPatch, *, migrate: bool = True) -> Any:
+    url = f"sqlite:///{(root / 'pipeline.db').as_posix()}"
+    monkeypatch.setenv(DATABASE_URL_ENV, url)
+    engine = create_db_engine(url)
+    if migrate:
+        apply_migrations(engine)
+    return engine
+
+
+def test_database_is_off_by_default(root: Path) -> None:
+    assert run_pipeline_from_file(write_config(root), now=NOW).report["database"] is None
+
+
+def test_pipeline_saves_the_dataset_to_the_database(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = database_engine(root, monkeypatch)
+    config = write_config(root, database=True)
+    first = run_pipeline_from_file(config, now=NOW)
+    assert first.report["database"] == {"saved": True}
+    stored = DatasetRepository(engine).load(first.dataset.dataset_id)
+    assert stored == first.dataset
+
+    second = run_pipeline_from_file(config, now=NOW + timedelta(hours=1))
+    assert second.dataset.dataset_id == first.dataset.dataset_id
+    assert second.report["database"] == {"saved": False}  # cùng nội dung, không ghi lại
+
+
+def test_database_option_needs_the_url_variable(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(DATABASE_URL_ENV, raising=False)
+    with pytest.raises(ContractError):
+        run_pipeline_from_file(write_config(root, database=True), now=NOW)
+
+
+def test_database_option_needs_migrations(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database_engine(root, monkeypatch, migrate=False)
+    with pytest.raises(DatabaseError):
+        run_pipeline_from_file(write_config(root, database=True), now=NOW)
