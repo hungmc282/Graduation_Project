@@ -10,9 +10,11 @@ from typing import Any
 import pytest
 
 from common.errors import ContractError, InvalidReferenceError, ResourceNotFoundError
+from sv1_data.db import DATABASE_URL_ENV, DatabaseError, apply_migrations, create_db_engine
 from sv1_data.enrichment.service import EPSS_CACHE_NAME, KEV_CACHE_NAME
 from sv1_data.history import ScanHistory
 from sv1_data.pipeline import main, run_pipeline_from_file
+from sv1_data.repository import DatasetRepository
 from sv1_data.service import load_dataset
 
 NOW = datetime(2026, 10, 19, 12, 0, tzinfo=UTC)
@@ -72,6 +74,31 @@ TRIVY_REPORT = {
 }
 
 
+NUCLEI_RECORDS = [
+    {
+        "template-id": "cookies-without-secure",
+        "info": {"name": "Cookies without Secure attribute", "severity": "info"},
+        "port": "443",
+        "matched-at": "https://web.lab:443",
+        "request": "SECRETREQUEST",
+        "timestamp": "2026-10-18T16:14:22.74541532Z",
+        "matcher-status": True,
+    },
+    {
+        "template-id": "log4j-rce",
+        "info": {
+            "name": "Log4j RCE",
+            "severity": "critical",
+            "classification": {"cve-id": ["cve-2021-44228"], "cvss-score": 10.0},
+        },
+        "port": "443",
+        "matched-at": "https://web.lab:443/api",
+        "timestamp": "2026-10-18T16:14:23Z",
+        "matcher-status": True,
+    },
+]
+
+
 def set_fresh(path: Path) -> None:
     stamp = (NOW - timedelta(hours=1)).timestamp()
     os.utime(path, (stamp, stamp))
@@ -81,6 +108,9 @@ def write_inputs(root: Path) -> None:
     (root / "assets.csv").write_text(CSV_TEXT, encoding="utf-8")
     (root / "nmap.xml").write_text(NMAP_XML, encoding="utf-8")
     (root / "trivy.json").write_text(json.dumps(TRIVY_REPORT), encoding="utf-8")
+    (root / "nuclei.jsonl").write_text(
+        "\n".join(json.dumps(r) for r in NUCLEI_RECORDS), encoding="utf-8"
+    )
     cache = root / "cache"
     cache.mkdir()
     (cache / EPSS_CACHE_NAME).write_bytes(gzip.compress(EPSS_TEXT.encode("utf-8")))
@@ -344,3 +374,137 @@ def test_rerun_with_identical_input_adds_no_history_entry(root: Path) -> None:
     assert info["run_id"] == info["previous_run_id"]
     assert all(value == 0 for key, value in info["diff"].items() if key != "persisting_findings")
     assert len(ScanHistory(root / "history").runs()) == 1
+
+
+def nuclei_config(root: Path, **override: Any) -> Path:
+    item: dict[str, Any] = {
+        "path": "nuclei.jsonl",
+        "asset_id": "WEB01",
+        "service_by_port": {"443": "WEB01:tcp/443"},
+    }
+    item.update(override)
+    return write_config(root, nuclei=[item])
+
+
+def test_nuclei_findings_join_the_dataset_and_are_enriched(root: Path) -> None:
+    result = run_pipeline_from_file(nuclei_config(root), now=NOW)
+    nuclei = [f for f in result.dataset.findings if ":nuclei:" in f.finding_id]
+    assert len(nuclei) == 2
+    assert {f.vulnerability_id for f in nuclei} == {"cookies-without-secure", "CVE-2021-44228"}
+    assert all(f.service_id == "WEB01:tcp/443" for f in nuclei)
+
+    log4j = next(f for f in nuclei if f.vulnerability_id == "CVE-2021-44228")
+    assert (log4j.cvss_score, log4j.is_kev, log4j.epss_probability) == (10.0, True, 0.975)
+    cookie = next(f for f in nuclei if f.vulnerability_id == "cookies-without-secure")
+    assert (cookie.is_kev, cookie.enriched_at) == (None, None)  # không phải CVE: chưa biết
+    assert all("SECRETREQUEST" not in " ".join(f.evidence) for f in nuclei)
+
+
+def test_nuclei_input_is_reported(root: Path) -> None:
+    report = run_pipeline_from_file(nuclei_config(root), now=NOW).report
+    assert "nuclei" in {item["kind"] for item in report["inputs"]}
+    assert report["nuclei_stats"]["findings"] == 2
+    assert "nuclei" in report["timings_seconds"]
+    assert report["counts"]["findings"] == 5  # 3 của Trivy và 2 của Nuclei
+
+
+def test_nuclei_min_severity_is_applied(root: Path) -> None:
+    result = run_pipeline_from_file(nuclei_config(root, min_severity="high"), now=NOW)
+    nuclei = [f for f in result.dataset.findings if ":nuclei:" in f.finding_id]
+    assert [f.vulnerability_id for f in nuclei] == ["CVE-2021-44228"]
+    assert result.report["nuclei_stats"]["below_min_severity"] == 1
+
+
+def test_nuclei_only_dataset_needs_a_cache_when_enriching(root: Path) -> None:
+    config = write_config(
+        root,
+        inventory_csv=None,
+        nmap_xml=[],
+        trivy=[],
+        nuclei=[{"path": "nuclei.jsonl", "asset_id": "WEB01"}],
+        cache_dir=None,
+    )
+    with pytest.raises(ContractError):
+        run_pipeline_from_file(config, now=NOW)
+
+
+def add_kev_entry(root: Path) -> None:
+    kev = {
+        **KEV_JSON,
+        "count": 2,
+        "vulnerabilities": [
+            *KEV_JSON["vulnerabilities"],
+            {"cveID": "CVE-2019-10082", "dateAdded": "2026-10-19"},
+        ],
+    }
+    cache_file = root / "cache" / KEV_CACHE_NAME
+    cache_file.write_text(json.dumps(kev), encoding="utf-8")
+    set_fresh(cache_file)
+
+
+def test_dataset_id_is_the_base_name_plus_a_content_hash(root: Path) -> None:
+    result = run_pipeline_from_file(write_config(root), now=NOW)
+    assert result.dataset.dataset_id.startswith("test-lab-")
+    assert len(result.dataset.dataset_id) == len("test-lab-") + 12
+    assert result.report["base_dataset_id"] == "test-lab"
+    assert len(result.report["content_sha256"]) == 64
+
+
+def test_same_content_keeps_the_id_even_when_run_at_another_time(root: Path) -> None:
+    config = write_config(root)
+    first = run_pipeline_from_file(config, now=NOW)
+    second = run_pipeline_from_file(config, now=NOW + timedelta(hours=1))
+    assert second.dataset.created_at != first.dataset.created_at
+    assert second.dataset.dataset_id == first.dataset.dataset_id
+    assert second.report["content_sha256"] == first.report["content_sha256"]
+
+
+def test_changed_content_gets_a_new_id(root: Path) -> None:
+    config = write_config(root)
+    first = run_pipeline_from_file(config, now=NOW)
+    add_kev_entry(root)
+    second = run_pipeline_from_file(config, now=NOW)
+    assert second.dataset.dataset_id != first.dataset.dataset_id
+    assert second.report["content_sha256"] != first.report["content_sha256"]
+
+
+def database_engine(root: Path, monkeypatch: pytest.MonkeyPatch, *, migrate: bool = True) -> Any:
+    url = f"sqlite:///{(root / 'pipeline.db').as_posix()}"
+    monkeypatch.setenv(DATABASE_URL_ENV, url)
+    engine = create_db_engine(url)
+    if migrate:
+        apply_migrations(engine)
+    return engine
+
+
+def test_database_is_off_by_default(root: Path) -> None:
+    assert run_pipeline_from_file(write_config(root), now=NOW).report["database"] is None
+
+
+def test_pipeline_saves_the_dataset_to_the_database(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = database_engine(root, monkeypatch)
+    config = write_config(root, database=True)
+    first = run_pipeline_from_file(config, now=NOW)
+    assert first.report["database"] == {"saved": True}
+    stored = DatasetRepository(engine).load(first.dataset.dataset_id)
+    assert stored == first.dataset
+
+    second = run_pipeline_from_file(config, now=NOW + timedelta(hours=1))
+    assert second.dataset.dataset_id == first.dataset.dataset_id
+    assert second.report["database"] == {"saved": False}  # cùng nội dung, không ghi lại
+
+
+def test_database_option_needs_the_url_variable(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(DATABASE_URL_ENV, raising=False)
+    with pytest.raises(ContractError):
+        run_pipeline_from_file(write_config(root, database=True), now=NOW)
+
+
+def test_database_option_needs_migrations(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database_engine(root, monkeypatch, migrate=False)
+    with pytest.raises(DatabaseError):
+        run_pipeline_from_file(write_config(root, database=True), now=NOW)

@@ -16,15 +16,28 @@ File cấu hình JSON (đường dẫn tương đối được tính từ thư m
           "service_by_package": {"apache2": "WEB01:tcp/8080"}
         }
       ],
+      "nuclei": [
+        {
+          "path": "nuclei_dvwa.jsonl",
+          "asset_id": "WEB01",
+          "service_by_port": {"8080": "WEB01:tcp/8080"},
+          "min_severity": "info"
+        }
+      ],
       "topology_json": "topology.json",
       "enrich": true,
       "cache_dir": "cache",
-      "history_dir": "history"
+      "history_dir": "history",
+      "database": false
     }
 
-`inventory_csv`, `nmap_xml`, `trivy`, `topology_json` đều tuỳ chọn nhưng phải có ít nhất một
+`dataset_id` là tên gốc: dataset_id thật được ghép với mã băm nội dung (xem identity.py), nên
+chạy lại cùng dữ liệu cho cùng ID và dữ liệu đổi thì ID đổi.
+`inventory_csv`, `nmap_xml`, `trivy`, `nuclei`, `topology_json` đều tuỳ chọn, cần ít nhất một
 nguồn. `history_dir` (tuỳ chọn) bật lịch sử quét: mỗi lần chạy được lưu lại và báo cáo ghi những
-gì đã thay đổi so với lần chạy trước (xem history.py). `topology_json` do SV2 cung cấp:
+gì đã thay đổi so với lần chạy trước (xem history.py). `database` (mặc định false) lưu thêm
+snapshot vào CSDL có địa chỉ trong biến môi trường APP_DATABASE_URL (cần chạy migration trước:
+python -m sv1_data.db migrate). `topology_json` do SV2 cung cấp:
 {"connections": [...], "exploit_rules": [...]}.
 Kết quả: `<output_dir>/dataset.json` (DatasetSnapshot hợp lệ) và `<output_dir>/report.json`
 (số lượng, thời gian từng bước, mã băm file đầu vào, phiên bản EPSS/KEV, cảnh báo).
@@ -57,10 +70,14 @@ from common.schemas import (
     Service,
 )
 from sv1_data.adapters.nmap_xml import parse_nmap_xml
+from sv1_data.adapters.nuclei_jsonl import parse_nuclei_jsonl
 from sv1_data.adapters.trivy_json import parse_trivy_json
+from sv1_data.db import create_db_engine, database_url_from_env
 from sv1_data.enrichment.service import enrich_findings, load_threat_data
 from sv1_data.history import ScanHistory, diff_datasets
+from sv1_data.identity import content_hash, with_content_id
 from sv1_data.inventory import load_asset_inventory, merge_assets
+from sv1_data.repository import DatasetRepository
 from sv1_data.service import save_dataset
 
 REPORT_FILENAME = "report.json"
@@ -74,6 +91,15 @@ class TrivyInput(BaseModel):
     service_by_package: dict[str, str] = {}
 
 
+class NucleiInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    asset_id: str
+    service_by_port: dict[int, str] = {}
+    min_severity: str = "info"
+
+
 class PipelineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -82,10 +108,12 @@ class PipelineConfig(BaseModel):
     inventory_csv: str | None = None
     nmap_xml: list[str] = []
     trivy: list[TrivyInput] = []
+    nuclei: list[NucleiInput] = []
     topology_json: str | None = None
     enrich: bool = True
     cache_dir: str | None = None
     history_dir: str | None = None
+    database: bool = False
 
 
 class _Topology(BaseModel):
@@ -146,12 +174,18 @@ def run_pipeline(
         InvalidReferenceError: tham chiếu giữa các bản ghi không hợp lệ (không ghi file nào).
     """
     created_at = now or datetime.now(UTC)
-    if not (config.inventory_csv or config.nmap_xml or config.trivy or config.topology_json):
+    if not (
+        config.inventory_csv
+        or config.nmap_xml
+        or config.trivy
+        or config.nuclei
+        or config.topology_json
+    ):
         raise ContractError(
-            "Cần ít nhất một nguồn: inventory_csv, nmap_xml, trivy hoặc topology_json.",
+            "Cần ít nhất một nguồn: inventory_csv, nmap_xml, trivy, nuclei hoặc topology_json.",
             [{"field": "config", "record_id": ""}],
         )
-    if config.enrich and config.trivy and not config.cache_dir:
+    if config.enrich and (config.trivy or config.nuclei) and not config.cache_dir:
         raise ContractError(
             "enrich = true cần khai báo cache_dir (hoặc đặt enrich = false).",
             [{"field": "cache_dir", "record_id": ""}],
@@ -193,6 +227,22 @@ def run_pipeline(
             warnings += [f"{path.name}: {w}" for w in trivy_scan.warnings]
             for key, value in trivy_scan.stats.items():
                 trivy_stats[key] = trivy_stats.get(key, 0) + value
+
+    nuclei_stats: dict[str, int] = {}
+    with _stage(timings, "nuclei"):
+        for nuclei_item in config.nuclei:
+            nuclei_path = _input(base_dir, nuclei_item.path, "nuclei", inputs)
+            nuclei_scan = parse_nuclei_jsonl(
+                nuclei_path,
+                nuclei_item.asset_id,
+                nuclei_item.service_by_port,
+                min_severity=nuclei_item.min_severity,
+            )
+            for finding in nuclei_scan.findings:
+                findings.setdefault(finding.finding_id, finding)
+            warnings += [f"{nuclei_path.name}: {w}" for w in nuclei_scan.warnings]
+            for key, value in nuclei_scan.stats.items():
+                nuclei_stats[key] = nuclei_stats.get(key, 0) + value
 
     with _stage(timings, "merge"):
         assets, merge_warnings = merge_assets(inventory_assets, list(scanned_assets.values()))
@@ -240,7 +290,7 @@ def run_pipeline(
     kinds: set[str] = set()
     if config.inventory_csv or config.topology_json:
         kinds.add("manual")
-    if config.nmap_xml or config.trivy:
+    if config.nmap_xml or config.trivy or config.nuclei:
         kinds.add("scanner")
     source = next(iter(kinds)) if len(kinds) == 1 else "mixed"
 
@@ -256,6 +306,7 @@ def run_pipeline(
         exploit_rules=exploit_rules,
     )
 
+    dataset = with_content_id(dataset, config.dataset_id)  # đổi dữ liệu thì đổi dataset_id
     output_dir = _resolve(base_dir, config.output_dir)
     with _stage(timings, "validate_and_save"):
         dataset_path = save_dataset(dataset, output_dir)  # kiểm tra hợp đồng trước khi ghi
@@ -275,12 +326,23 @@ def run_pipeline(
                 "newly_kev": diff.newly_kev if diff else [],
             }
 
+    database_info: dict[str, Any] | None = None
+    with _stage(timings, "database"):
+        if config.database:
+            engine = create_db_engine(database_url_from_env())
+            try:
+                database_info = {"saved": DatasetRepository(engine).save(dataset, now=created_at)}
+            finally:
+                engine.dispose()
+
     timings["total"] = round(time.perf_counter() - total_start, 6)
     report: dict[str, Any] = {
         "dataset_id": dataset.dataset_id,
         "schema_version": dataset.schema_version,
         "created_at": created_at.isoformat(),
         "source": dataset.source,
+        "base_dataset_id": config.dataset_id,
+        "content_sha256": content_hash(dataset),
         "counts": {
             "assets": len(dataset.assets),
             "services": len(dataset.services),
@@ -290,9 +352,11 @@ def run_pipeline(
         },
         "inputs": inputs,
         "trivy_stats": trivy_stats or None,
+        "nuclei_stats": nuclei_stats or None,
         "threat_data": threat_data,
         "enrichment_stats": enrichment_stats,
         "history": history_info,
+        "database": database_info,
         "timings_seconds": timings,
         "warnings": warnings,
     }

@@ -164,3 +164,10 @@ def test_command_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> Non
 
     assert main(["--out", str(tmp_path), "--sizes", "2"]) == 1
     assert "LỖI" in capsys.readouterr().err
+
+
+def test_dataset_id_is_derived_from_content() -> None:
+    first = generate_dataset(seed=1, n_assets=10)
+    assert first.dataset_id.startswith("synthetic-10-seed1-")
+    assert generate_dataset(seed=1, n_assets=10).dataset_id == first.dataset_id
+    assert generate_dataset(seed=2, n_assets=10).dataset_id != first.dataset_id
