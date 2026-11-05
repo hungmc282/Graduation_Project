@@ -1,0 +1,9 @@
+{
+  "dataset_id": "sv1-input-invalid-port",
+  "output_dir": "../../../outputs/sv1-input-checks/invalid-port",
+  "enrich": false,
+  "source_override": "synthetic",
+  "nmap_xml": [
+    "nmap-invalid.xml"
+  ]
+}

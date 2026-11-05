@@ -54,7 +54,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -77,6 +77,7 @@ from sv1_data.enrichment.service import enrich_findings, load_threat_data
 from sv1_data.history import ScanHistory, diff_datasets
 from sv1_data.identity import content_hash, with_content_id
 from sv1_data.inventory import load_asset_inventory, merge_assets
+from sv1_data.merging import merge_record
 from sv1_data.repository import DatasetRepository
 from sv1_data.service import save_dataset
 
@@ -110,6 +111,8 @@ class PipelineConfig(BaseModel):
     trivy: list[TrivyInput] = []
     nuclei: list[NucleiInput] = []
     topology_json: str | None = None
+    offline: bool = False
+    source_override: Literal["synthetic"] | None = None
     enrich: bool = True
     cache_dir: str | None = None
     history_dir: str | None = None
@@ -140,12 +143,18 @@ def load_config(path: Path) -> tuple[PipelineConfig, Path]:
             [{"field": "config", "record_id": str(config_path)}],
         )
     try:
-        config = PipelineConfig.model_validate_json(config_path.read_text(encoding="utf-8-sig"))
+        config = PipelineConfig.model_validate_json(
+            config_path.read_text(encoding="utf-8-sig")
+        )
     except ValidationError as exc:
         raise ContractError(
             "File cấu hình không hợp lệ.",
             [
-                {"field": ".".join(str(p) for p in e["loc"]), "record_id": "", "reason": e["msg"]}
+                {
+                    "field": ".".join(str(p) for p in e["loc"]),
+                    "record_id": "",
+                    "reason": e["msg"],
+                }
                 for e in exc.errors()
             ],
         ) from exc
@@ -153,7 +162,10 @@ def load_config(path: Path) -> tuple[PipelineConfig, Path]:
 
 
 def run_pipeline_from_file(
-    config_path: Path, *, now: datetime | None = None, client: httpx.Client | None = None
+    config_path: Path,
+    *,
+    now: datetime | None = None,
+    client: httpx.Client | None = None,
 ) -> PipelineResult:
     config, base_dir = load_config(config_path)
     return run_pipeline(config, base_dir, now=now, client=client)
@@ -195,6 +207,14 @@ def run_pipeline(
     warnings: list[str] = []
     inputs: list[dict[str, str]] = []
     total_start = time.perf_counter()
+    asset_origins: dict[str, str] = {}
+    service_origins: dict[str, str] = {}
+    finding_origins: dict[str, str] = {}
+    merge_stats = {
+        "duplicate_assets": 0,
+        "duplicate_services": 0,
+        "duplicate_findings": 0,
+    }
 
     inventory_assets: list[Asset] = []
     address_map: dict[str, str] = {}
@@ -202,28 +222,64 @@ def run_pipeline(
         if config.inventory_csv:
             path = _input(base_dir, config.inventory_csv, "inventory", inputs)
             inventory = load_asset_inventory(path)
-            inventory_assets, address_map = inventory.assets, inventory.address_to_asset_id
+            inventory_assets, address_map = (
+                inventory.assets,
+                inventory.address_to_asset_id,
+            )
             warnings += inventory.warnings
 
     scanned_assets: dict[str, Asset] = {}
     services: dict[str, Service] = {}
     with _stage(timings, "nmap"):
         for name in config.nmap_xml:
-            scan = parse_nmap_xml(_input(base_dir, name, "nmap", inputs), address_map)
+            scan_path = _input(base_dir, name, "nmap", inputs)
+            scan = parse_nmap_xml(scan_path, address_map)
+            merge_stats.setdefault("duplicates_within_nmap", 0)
+            merge_stats["duplicates_within_nmap"] += scan.duplicates_removed
             for asset in scan.assets:
-                scanned_assets.setdefault(asset.asset_id, asset)
+                merge_stats["duplicate_assets"] += merge_record(
+                    scanned_assets, asset_origins, asset.asset_id, asset, str(scan_path)
+                )
             for service in scan.services:
-                services.setdefault(service.service_id, service)
+                merge_stats["duplicate_services"] += merge_record(
+                    services,
+                    service_origins,
+                    service.service_id,
+                    service,
+                    str(scan_path),
+                )
             warnings += scan.warnings
 
     findings: dict[str, Finding] = {}
     trivy_stats: dict[str, int] = {}
+    finding_contexts: dict[str, tuple[str | None, str | None]] = {}
     with _stage(timings, "trivy"):
         for item in config.trivy:
             path = _input(base_dir, item.path, "trivy", inputs)
             trivy_scan = parse_trivy_json(path, item.asset_id, item.service_by_package)
             for finding in trivy_scan.findings:
-                findings.setdefault(finding.finding_id, finding)
+                context = trivy_scan.finding_contexts[finding.finding_id]
+                if (
+                    finding.finding_id in finding_contexts
+                    and finding_contexts[finding.finding_id] != context
+                ):
+                    raise ContractError(
+                        "Cùng finding ID nhưng khác artifact/target; cần tách nguồn đầu vào.",
+                        [
+                            {
+                                "field": "ArtifactName/Results.Target",
+                                "record_id": finding.finding_id,
+                                "sources": [
+                                    finding_origins[finding.finding_id],
+                                    str(path),
+                                ],
+                            }
+                        ],
+                    )
+                finding_contexts[finding.finding_id] = context
+                merge_stats["duplicate_findings"] += merge_record(
+                    findings, finding_origins, finding.finding_id, finding, str(path)
+                )
             warnings += [f"{path.name}: {w}" for w in trivy_scan.warnings]
             for key, value in trivy_scan.stats.items():
                 trivy_stats[key] = trivy_stats.get(key, 0) + value
@@ -245,16 +301,23 @@ def run_pipeline(
                 nuclei_stats[key] = nuclei_stats.get(key, 0) + value
 
     with _stage(timings, "merge"):
-        assets, merge_warnings = merge_assets(inventory_assets, list(scanned_assets.values()))
+        assets, merge_warnings = merge_assets(
+            inventory_assets, list(scanned_assets.values())
+        )
         warnings += merge_warnings
 
-    final_findings = list(findings.values())
+    assets.sort(key=lambda asset: asset.asset_id)
+    services = dict(sorted(services.items()))
+    final_findings = [value for _, value in sorted(findings.items())]
     threat_data: dict[str, Any] | None = None
     enrichment_stats: dict[str, int] | None = None
     with _stage(timings, "enrichment"):
         if config.enrich and final_findings:
             epss, kev, cache_warnings = load_threat_data(
-                _resolve(base_dir, config.cache_dir or ""), now=created_at, client=client
+                _resolve(base_dir, config.cache_dir or ""),
+                now=created_at,
+                client=client,
+                offline=config.offline,
             )
             enriched = enrich_findings(final_findings, epss, kev, now=created_at)
             final_findings = enriched.findings
@@ -272,7 +335,9 @@ def run_pipeline(
     if config.topology_json:
         topology_path = _input(base_dir, config.topology_json, "topology", inputs)
         try:
-            topology = _Topology.model_validate_json(topology_path.read_text(encoding="utf-8-sig"))
+            topology = _Topology.model_validate_json(
+                topology_path.read_text(encoding="utf-8-sig")
+            )
         except ValidationError as exc:
             raise ContractError(
                 "File topology không đúng hợp đồng.",
@@ -294,6 +359,16 @@ def run_pipeline(
         kinds.add("scanner")
     source = next(iter(kinds)) if len(kinds) == 1 else "mixed"
 
+    if config.source_override == "synthetic":
+        source = "synthetic"
+        final_findings = [
+            finding.model_copy(update={"source": "synthetic"})
+            for finding in final_findings
+        ]
+        warnings.append(
+            "SYNTHETIC_DATA: toàn bộ đầu vào được khai báo là dữ liệu giả lập."
+        )
+
     dataset = DatasetSnapshot(
         schema_version=SCHEMA_VERSION,
         dataset_id=config.dataset_id,
@@ -309,7 +384,9 @@ def run_pipeline(
     dataset = with_content_id(dataset, config.dataset_id)  # đổi dữ liệu thì đổi dataset_id
     output_dir = _resolve(base_dir, config.output_dir)
     with _stage(timings, "validate_and_save"):
-        dataset_path = save_dataset(dataset, output_dir)  # kiểm tra hợp đồng trước khi ghi
+        dataset_path = save_dataset(
+            dataset, output_dir
+        )  # kiểm tra hợp đồng trước khi ghi
 
     history_info: dict[str, Any] | None = None
     with _stage(timings, "history"):
@@ -318,7 +395,9 @@ def run_pipeline(
             previous = history.latest()
             previous_dataset = history.load(previous.run_id) if previous else None
             record = history.record(dataset)
-            diff = diff_datasets(previous_dataset, dataset) if previous_dataset else None
+            diff = (
+                diff_datasets(previous_dataset, dataset) if previous_dataset else None
+            )
             history_info = {
                 "run_id": record.run_id,
                 "previous_run_id": previous.run_id if previous else None,
@@ -343,6 +422,7 @@ def run_pipeline(
         "source": dataset.source,
         "base_dataset_id": config.dataset_id,
         "content_sha256": content_hash(dataset),
+        "offline": config.offline,
         "counts": {
             "assets": len(dataset.assets),
             "services": len(dataset.services),
@@ -351,6 +431,7 @@ def run_pipeline(
             "exploit_rules": len(dataset.exploit_rules),
         },
         "inputs": inputs,
+        "merge_stats": merge_stats,
         "trivy_stats": trivy_stats or None,
         "nuclei_stats": nuclei_stats or None,
         "threat_data": threat_data,
@@ -419,7 +500,11 @@ def _input(base_dir: Path, value: str, kind: str, inputs: list[dict[str, str]]) 
             [{"field": kind, "record_id": str(path)}],
         )
     inputs.append(
-        {"kind": kind, "file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        {
+            "kind": kind,
+            "file": path.name,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
     )
     return path
 

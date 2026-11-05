@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0.0",
+  "dataset_id": "diamond-v1",
+  "analysis_id": "8f9f397a5ad76f358578a8ffdcdb663d251c8b88b0ac83a5ced1baeb7ac00ff0",
+  "created_at": "2026-10-17T16:34:19.888214Z",
+  "graph_model_version": "reference-lab-v1",
+  "risk_model_version": "context-path-v1",
+  "config_hash": "b4b0ef72d9f3a254c56daab10248e7c0ad091e0ac9d48614bc0597ae38f9bf0b",
+  "patched_finding_ids": [],
+  "target_asset_ids": [
+    "DB01"
+  ],
+  "ranking_metric": "remediation_impact",
+  "risk_score_status": "complete",
+  "risk_before": 41.28249999999999,
+  "baseline_cvss_order": [
+    "F03",
+    "F02",
+    "F01",
+    "F04"
+  ],
+  "results": [
+    {
+      "finding_id": "F01",
+      "asset_id": "WEB01",
+      "cvss_score": 7.5,
+      "paths_before": 2,
+      "paths_after": 0,
+      "paths_blocked": 2,
+      "blocked_path_ids": [
+        "path-7ad8b77433937344dc4737be416f24f5cb5dc5bf43f494511e3351a692927eee",
+        "path-afdc63e61578772c9d5c055223923a55624bbee89fcc3d2da24fc6548e074d67"
+      ],
+      "risk_after": 0.0,
+      "remediation_impact": 41.28249999999999,
+      "priority_rank": 1,
+      "reason_codes": [
+        "REDUCES_SYSTEM_RISK",
+        "BLOCKS_TARGET_PATH",
+        "ON_CRITICAL_TARGET_PATH"
+      ]
+    },
+    {
+      "finding_id": "F02",
+      "asset_id": "APP01",
+      "cvss_score": 8.0,
+      "paths_before": 2,
+      "paths_after": 1,
+      "paths_blocked": 1,
+      "blocked_path_ids": [
+        "path-afdc63e61578772c9d5c055223923a55624bbee89fcc3d2da24fc6548e074d67"
+      ],
+      "risk_after": 23.589999999999993,
+      "remediation_impact": 17.6925,
+      "priority_rank": 2,
+      "reason_codes": [
+        "REDUCES_SYSTEM_RISK",
+        "BLOCKS_TARGET_PATH",
+        "ON_CRITICAL_TARGET_PATH"
+      ]
+    },
+    {
+      "finding_id": "F03",
+      "asset_id": "TEST01",
+      "cvss_score": 9.8,
+      "paths_before": 2,
+      "paths_after": 2,
+      "paths_blocked": 0,
+      "blocked_path_ids": [],
+      "risk_after": 41.28249999999999,
+      "remediation_impact": 0.0,
+      "priority_rank": 3,
+      "reason_codes": [
+        "NO_ADDITIONAL_RISK_REDUCTION"
+      ]
+    },
+    {
+      "finding_id": "F04",
+      "asset_id": "APP02",
+      "cvss_score": 6.0,
+      "paths_before": 2,
+      "paths_after": 1,
+      "paths_blocked": 1,
+      "blocked_path_ids": [
+        "path-7ad8b77433937344dc4737be416f24f5cb5dc5bf43f494511e3351a692927eee"
+      ],
+      "risk_after": 41.28249999999999,
+      "remediation_impact": 0.0,
+      "priority_rank": 3,
+      "reason_codes": [
+        "BLOCKS_TARGET_PATH",
+        "ON_CRITICAL_TARGET_PATH"
+      ]
+    }
+  ],
+  "warnings": [
+    "HEURISTIC_INDEX: scores are not calibrated attack probabilities",
+    "REFERENCE_LAB: feasible paths follow declared synthetic rules, not verified exploits",
+    "SYNTHETIC_DATA: not evidence of effectiveness on real infrastructure"
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "dataset_id": "sv1-input-invalid-trivy",
+  "output_dir": "../../../outputs/sv1-input-checks/invalid-trivy",
+  "enrich": false,
+  "source_override": "synthetic",
+  "nmap_xml": [],
+  "trivy": [
+    {
+      "path": "trivy-invalid.json",
+      "asset_id": "WEB01"
+    }
+  ]
+}
