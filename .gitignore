@@ -16,13 +16,3 @@ venv/
 *.safetensors
 local_data/
 outputs/
-
-# SV4 personal history and asset drafts
-data/local/
-sv4_app_llm/backup-before-refactor-*/
-
-# Editable Python package build metadata
-*.egg-info/
-build/
-
-.ruff_cache/

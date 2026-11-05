@@ -24,7 +24,6 @@ from pydantic import ValidationError
 
 from common.errors import ContractError, ResourceNotFoundError, UnsupportedVersionError
 from common.schemas import Finding
-from sv1_data.merging import merge_record
 
 SUPPORTED_TRIVY_SCHEMA_VERSION = 2
 _MAX_TITLE_LENGTH = 200
@@ -38,9 +37,6 @@ class TrivyScan:
     findings: list[Finding]
     warnings: list[str] = field(default_factory=list)
     stats: dict[str, int] = field(default_factory=dict)
-    finding_contexts: dict[str, tuple[str | None, str | None]] = field(
-        default_factory=dict
-    )
 
 
 def parse_trivy_json(
@@ -67,15 +63,7 @@ def parse_trivy_json(
             f"Không tìm thấy báo cáo Trivy: {json_path}.",
             [{"field": "path", "record_id": str(json_path)}],
         )
-    try:
-        return parse_trivy_json_bytes(
-            json_path.read_bytes(), asset_id, service_by_package
-        )
-    except ContractError as exc:
-        raise ContractError(
-            f"{json_path}: {exc.message}",
-            [dict(detail, file=str(json_path)) for detail in exc.details],
-        ) from exc
+    return parse_trivy_json_bytes(json_path.read_bytes(), asset_id, service_by_package)
 
 
 def parse_trivy_json_bytes(
@@ -84,15 +72,9 @@ def parse_trivy_json_bytes(
     service_by_package: Mapping[str, str] | None = None,
 ) -> TrivyScan:
     """Giống `parse_trivy_json` nhưng nhận nội dung JSON dạng bytes."""
-    if not isinstance(asset_id, str):
-        raise ContractError(
-            "asset_id phải là chuỗi.", [{"field": "asset_id", "record_id": ""}]
-        )
     asset_id = asset_id.strip()
     if not asset_id:
-        raise ContractError(
-            "asset_id không được rỗng.", [{"field": "asset_id", "record_id": ""}]
-        )
+        raise ContractError("asset_id không được rỗng.", [{"field": "asset_id", "record_id": ""}])
 
     report = _load_report(data)
     observed_at = _parse_timestamp(report.get("CreatedAt"))
@@ -108,11 +90,9 @@ def parse_trivy_json_bytes(
         "secrets_skipped": 0,
     }
     findings: list[Finding] = []
-    unique: dict[str, Finding] = {}
-    origins: dict[str, str] = {}
-    targets: dict[str, str | None] = {}
+    seen: set[str] = set()
 
-    for result_index, result in enumerate(report.get("Results") or []):
+    for result in report.get("Results") or []:
         stats["secrets_skipped"] += len(result.get("Secrets") or [])
         for vuln in result.get("Vulnerabilities") or []:
             stats["vulnerabilities_read"] += 1
@@ -123,11 +103,13 @@ def parse_trivy_json_bytes(
 
             pkg_name = _text(vuln.get("PkgName"))
             installed = _text(vuln.get("InstalledVersion"))
-            pkg_id = (
-                _text(vuln.get("PkgID"))
-                or f"{pkg_name or 'unknown'}@{installed or 'unknown'}"
-            )
+            pkg_id = _text(vuln.get("PkgID")) or f"{pkg_name or 'unknown'}@{installed or 'unknown'}"
             finding_id = f"{asset_id}:{vulnerability_id}:{pkg_id}"
+            if finding_id in seen:
+                stats["duplicates_removed"] += 1
+                continue
+            seen.add(finding_id)
+
             score, score_source, invalid = _pick_cvss(vuln.get("CVSS"))
             stats["invalid_cvss_ignored"] += invalid
             if score is None:
@@ -138,9 +120,7 @@ def parse_trivy_json_bytes(
                     Finding(
                         finding_id=finding_id,
                         asset_id=asset_id,
-                        service_id=packages_to_services.get(pkg_name)
-                        if pkg_name
-                        else None,
+                        service_id=packages_to_services.get(pkg_name) if pkg_name else None,
                         vulnerability_id=vulnerability_id,
                         cvss_score=score,
                         epss_probability=None,
@@ -155,39 +135,13 @@ def parse_trivy_json_bytes(
                 raise ContractError(
                     f"Lỗ hổng {vulnerability_id} của Trivy không đúng schema.",
                     [
-                        {
-                            "field": ".".join(str(p) for p in e["loc"]),
-                            "record_id": finding_id,
-                        }
+                        {"field": ".".join(str(p) for p in e["loc"]), "record_id": finding_id}
                         for e in exc.errors()
                     ],
                 ) from exc
-            candidate = findings.pop()
-            target = _text(result.get("Target"))
-            if finding_id in targets and targets[finding_id] != target:
-                raise ContractError(
-                    "Cùng finding ID xuất hiện ở các Target khác nhau; cần tách nguồn.",
-                    [{"field": "Results.Target", "record_id": finding_id}],
-                )
-            targets[finding_id] = target
-            if merge_record(
-                unique, origins, finding_id, candidate, f"Results[{result_index}]"
-            ):
-                stats["duplicates_removed"] += 1
-            else:
-                stats["findings"] += 1
+            stats["findings"] += 1
 
-    findings = list(unique.values())
-
-    return TrivyScan(
-        findings=findings,
-        warnings=_summarize(stats),
-        stats=stats,
-        finding_contexts={
-            fid: (_text(report.get("ArtifactName")), target)
-            for fid, target in targets.items()
-        },
-    )
+    return TrivyScan(findings=findings, warnings=_summarize(stats), stats=stats)
 
 
 def _load_report(data: bytes) -> dict[str, Any]:
@@ -207,56 +161,6 @@ def _load_report(data: bytes) -> dict[str, Any]:
             f"(cần {SUPPORTED_TRIVY_SCHEMA_VERSION}).",
             [{"field": "SchemaVersion", "record_id": str(version)}],
         )
-    for name in ("ArtifactName", "CreatedAt"):
-        if report.get(name) is not None and not isinstance(report[name], str):
-            raise ContractError(
-                f"{name} phải là chuỗi.", [{"field": name, "record_id": ""}]
-            )
-    results = report.get("Results")
-    if results is not None and not isinstance(results, list):
-        raise ContractError(
-            "Results phải là mảng hoặc null.", [{"field": "Results", "record_id": ""}]
-        )
-    for index, result in enumerate(results or []):
-        prefix = f"Results[{index}]"
-        if not isinstance(result, dict):
-            raise ContractError(
-                "Result phải là object.", [{"field": prefix, "record_id": ""}]
-            )
-        if result.get("Target") is not None and not isinstance(result["Target"], str):
-            raise ContractError(
-                "Target phải là chuỗi.",
-                [{"field": f"{prefix}.Target", "record_id": ""}],
-            )
-        for name in ("Vulnerabilities", "Secrets"):
-            items = result.get(name)
-            if items is not None and not isinstance(items, list):
-                raise ContractError(
-                    f"{name} phải là mảng hoặc null.",
-                    [{"field": f"{prefix}.{name}", "record_id": ""}],
-                )
-        for position, vuln in enumerate(result.get("Vulnerabilities") or []):
-            if not isinstance(vuln, dict):
-                raise ContractError(
-                    "Vulnerability phải là object.",
-                    [
-                        {
-                            "field": f"{prefix}.Vulnerabilities[{position}]",
-                            "record_id": "",
-                        }
-                    ],
-                )
-            for name in ("VulnerabilityID", "PkgName", "PkgID", "InstalledVersion"):
-                if vuln.get(name) is not None and not isinstance(vuln[name], str):
-                    raise ContractError(
-                        f"{name} phải là chuỗi.",
-                        [
-                            {
-                                "field": f"{prefix}.Vulnerabilities[{position}].{name}",
-                                "record_id": "",
-                            }
-                        ],
-                    )
     return report
 
 

@@ -43,9 +43,7 @@ def enrich_findings(
 ) -> EnrichmentResult:
     """Điền epss_probability, is_kev, enriched_at. Không gọi mạng, không sửa đối tượng gốc."""
     if now.tzinfo is None:
-        raise ContractError(
-            "`now` phải có timezone (UTC).", [{"field": "now", "record_id": ""}]
-        )
+        raise ContractError("`now` phải có timezone (UTC).", [{"field": "now", "record_id": ""}])
     stats = {
         "findings": len(findings),
         "enriched": 0,
@@ -68,13 +66,9 @@ def enrich_findings(
         stats["kev_listed"] += 1 if entry else 0
         stats["enriched"] += 1
 
-        evidence = [
-            e for e in finding.evidence if not e.startswith(_OWN_EVIDENCE_PREFIXES)
-        ]
+        evidence = [e for e in finding.evidence if not e.startswith(_OWN_EVIDENCE_PREFIXES)]
         if score:
-            percentile = (
-                f"{score.percentile:.5f}" if score.percentile is not None else "n/a"
-            )
+            percentile = f"{score.percentile:.5f}" if score.percentile is not None else "n/a"
             evidence.append(
                 f"epss: {score.probability:.5f} (percentile {percentile}, "
                 f"model {epss.model_version or 'n/a'}, score date {epss.score_date or 'n/a'})"
@@ -98,9 +92,7 @@ def enrich_findings(
 
     warnings: list[str] = []
     if stats["non_cve_skipped"]:
-        warnings.append(
-            f"{stats['non_cve_skipped']} finding không có mã CVE nên không làm giàu."
-        )
+        warnings.append(f"{stats['non_cve_skipped']} finding không có mã CVE nên không làm giàu.")
     if stats["epss_missing"]:
         warnings.append(
             f"{stats['epss_missing']} CVE không có trong dữ liệu EPSS (epss_probability = null)."
@@ -116,25 +108,14 @@ def load_threat_data(
     now: datetime | None = None,
     client: httpx.Client | None = None,
     max_age: timedelta = DEFAULT_MAX_AGE,
-    offline: bool = False,
 ) -> tuple[EpssData, KevCatalog, list[str]]:
     """Lấy EPSS và KEV (từ cache hoặc mạng) rồi phân tích. Trả về cả cảnh báo về cache."""
     directory = Path(cache_dir)
     epss_bytes, epss_warnings = fetch_cached(
-        EPSS_URL,
-        directory / EPSS_CACHE_NAME,
-        max_age=max_age,
-        client=client,
-        now=now,
-        offline=offline,
+        EPSS_URL, directory / EPSS_CACHE_NAME, max_age=max_age, client=client, now=now
     )
     kev_bytes, kev_warnings = fetch_cached(
-        KEV_URL,
-        directory / KEV_CACHE_NAME,
-        max_age=max_age,
-        client=client,
-        now=now,
-        offline=offline,
+        KEV_URL, directory / KEV_CACHE_NAME, max_age=max_age, client=client, now=now
     )
     return parse_epss(epss_bytes), parse_kev(kev_bytes), epss_warnings + kev_warnings
 
@@ -146,16 +127,11 @@ def enrich_dataset(
     now: datetime,
     client: httpx.Client | None = None,
     max_age: timedelta = DEFAULT_MAX_AGE,
-    offline: bool = False,
 ) -> tuple[DatasetSnapshot, EnrichmentResult]:
     """Làm giàu toàn bộ finding của snapshot, trả về snapshot mới (không sửa bản gốc)."""
-    epss, kev, cache_warnings = load_threat_data(
-        cache_dir, now=now, client=client, max_age=max_age, offline=offline
-    )
+    epss, kev, cache_warnings = load_threat_data(cache_dir, now=now, client=client, max_age=max_age)
     result = enrich_findings(dataset.findings, epss, kev, now=now)
     enriched = dataset.model_copy(update={"findings": result.findings})
     return enriched, EnrichmentResult(
-        findings=result.findings,
-        warnings=cache_warnings + result.warnings,
-        stats=result.stats,
+        findings=result.findings, warnings=cache_warnings + result.warnings, stats=result.stats
     )

@@ -17,7 +17,6 @@ from pydantic import ValidationError
 
 from common.errors import ContractError, ResourceNotFoundError
 from common.schemas import Asset, Service
-from sv1_data.merging import merge_record
 
 
 @dataclass(frozen=True)
@@ -27,7 +26,6 @@ class NmapScan:
     assets: list[Asset]
     services: list[Service]
     warnings: list[str] = field(default_factory=list)
-    duplicates_removed: int = 0
 
 
 def parse_nmap_xml(path: Path, asset_ids: Mapping[str, str] | None = None) -> NmapScan:
@@ -48,22 +46,14 @@ def parse_nmap_xml(path: Path, asset_ids: Mapping[str, str] | None = None) -> Nm
             f"Không tìm thấy file Nmap XML: {xml_path}.",
             [{"field": "path", "record_id": str(xml_path)}],
         )
-    try:
-        return parse_nmap_xml_bytes(xml_path.read_bytes(), asset_ids)
-    except ContractError as exc:
-        raise ContractError(
-            f"{xml_path}: {exc.message}",
-            [dict(detail, file=str(xml_path)) for detail in exc.details],
-        ) from exc
+    return parse_nmap_xml_bytes(xml_path.read_bytes(), asset_ids)
 
 
-def parse_nmap_xml_bytes(
-    data: bytes, asset_ids: Mapping[str, str] | None = None
-) -> NmapScan:
+def parse_nmap_xml_bytes(data: bytes, asset_ids: Mapping[str, str] | None = None) -> NmapScan:
     """Giống `parse_nmap_xml` nhưng nhận nội dung XML dạng bytes."""
     try:
         root = ET.fromstring(data)
-    except (ET.ParseError, ValueError, LookupError) as exc:
+    except ET.ParseError as exc:
         raise ContractError(
             f"File Nmap XML không hợp lệ: {exc}.", [{"field": "<xml>", "record_id": ""}]
         ) from exc
@@ -108,23 +98,7 @@ def parse_nmap_xml_bytes(
                 ],
             ) from exc
 
-    unique_assets, unique_services, origins = {}, {}, {}
-    duplicates = 0
-    for asset in assets:
-        duplicates += merge_record(
-            unique_assets, origins, asset.asset_id, asset, "Nmap XML"
-        )
-    origins = {}
-    for service in services:
-        duplicates += merge_record(
-            unique_services, origins, service.service_id, service, "Nmap XML"
-        )
-    return NmapScan(
-        assets=list(unique_assets.values()),
-        services=list(unique_services.values()),
-        warnings=warnings,
-        duplicates_removed=duplicates,
-    )
+    return NmapScan(assets=assets, services=services, warnings=warnings)
 
 
 def _parse_ports(host: ET.Element, asset_id: str, warnings: list[str]) -> list[Service]:
@@ -141,22 +115,6 @@ def _parse_ports(host: ET.Element, asset_id: str, warnings: list[str]) -> list[S
                 "chưa được hợp đồng hỗ trợ."
             )
             continue
-        if (
-            not port_number.isascii()
-            or not port_number.isdecimal()
-            or not 1 <= int(port_number) <= 65535
-        ):
-            raise ContractError(
-                "Cổng Nmap phải là số nguyên từ 1 đến 65535.",
-                [
-                    {
-                        "field": "ports.port.portid",
-                        "record_id": asset_id,
-                        "value": port_number,
-                    }
-                ],
-            )
-        port_number = str(int(port_number))
         service = port.find("service")
         result.append(
             Service(
@@ -165,9 +123,7 @@ def _parse_ports(host: ET.Element, asset_id: str, warnings: list[str]) -> list[S
                 protocol=protocol,
                 port=int(port_number),
                 product=_clean(service.get("product")) if service is not None else None,
-                product_version=_clean(service.get("version"))
-                if service is not None
-                else None,
+                product_version=_clean(service.get("version")) if service is not None else None,
             )
         )
     return result
