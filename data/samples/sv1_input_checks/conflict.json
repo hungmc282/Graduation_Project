@@ -1,0 +1,10 @@
+{
+  "dataset_id": "sv1-input-conflict",
+  "output_dir": "../../../outputs/sv1-input-checks/conflict",
+  "enrich": false,
+  "source_override": "synthetic",
+  "nmap_xml": [
+    "nmap.xml",
+    "nmap-conflict.xml"
+  ]
+}

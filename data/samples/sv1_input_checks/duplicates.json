@@ -1,0 +1,10 @@
+{
+  "dataset_id": "sv1-input-duplicates",
+  "output_dir": "../../../outputs/sv1-input-checks/duplicates",
+  "enrich": false,
+  "source_override": "synthetic",
+  "nmap_xml": [
+    "nmap.xml",
+    "nmap.xml"
+  ]
+}

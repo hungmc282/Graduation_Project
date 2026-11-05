@@ -24,11 +24,21 @@ def fetch_cached(
     max_age: timedelta = DEFAULT_MAX_AGE,
     client: httpx.Client | None = None,
     now: datetime | None = None,
+    offline: bool = False,
 ) -> tuple[bytes, list[str]]:
     """Trả về (nội dung, cảnh báo). `client` và `now` cho phép kiểm thử không cần mạng."""
     current = now or datetime.now(UTC)
     cache_path = Path(cache_path)
     cached_at = _cached_at(cache_path)
+    if offline:
+        if cached_at is None:
+            raise ResourceNotFoundError(
+                f"Offline: thiếu feed tại {cache_path}.",
+                [{"field": "cache_path", "record_id": str(cache_path)}],
+            )
+        return cache_path.read_bytes(), [
+            f"OFFLINE: dùng feed local {cache_path.name}; không kiểm tra bản mới trên mạng."
+        ]
     if cached_at is not None and current - cached_at <= max_age:
         return cache_path.read_bytes(), []
     try:

@@ -1,0 +1,3 @@
+asset_id,name,asset_type,internet_facing,criticality,sensitive_data,addresses
+WEB01,Web mẫu,web_server,true,3,false,10.10.0.10
+DB01,DB mẫu,database_server,false,4,true,10.10.0.20

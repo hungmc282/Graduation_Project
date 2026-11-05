@@ -88,3 +88,69 @@ class DatasetSnapshot(_CanonicalModel):
     findings: list[Finding]
     connections: list[Connection]
     exploit_rules: list[ExploitRule]
+
+
+class GraphConfig(_CanonicalModel):
+    model_version: str = Field(min_length=1)
+    entry_point_ids: list[str]
+    target_asset_ids: list[str]
+    max_depth: int = Field(gt=0)
+    max_paths: int = Field(gt=0)
+
+
+class AttackPath(_CanonicalModel):
+    path_id: str = Field(min_length=1)
+    target_asset_id: str = Field(min_length=1)
+    asset_ids: list[str]
+    rule_ids: list[str]
+    finding_ids: list[str]
+
+
+class GraphResult(_CanonicalModel):
+    schema_version: str
+    dataset_id: str
+    graph_model_version: str
+    patched_finding_ids: list[str]
+    entry_point_ids: list[str]
+    target_asset_ids: list[str]
+    paths: list[AttackPath]
+    search_complete: bool
+    warnings: list[str]
+
+
+class RiskConfig(_CanonicalModel):
+    model_version: str = Field(min_length=1)
+    ranking_metric: Literal["critical_paths_blocked", "remediation_impact"]
+    parameters: dict[str, float]
+
+
+class PriorityItem(_CanonicalModel):
+    finding_id: str
+    asset_id: str
+    cvss_score: float | None = Field(ge=0, le=10)
+    paths_before: int = Field(ge=0)
+    paths_after: int = Field(ge=0)
+    paths_blocked: int = Field(ge=0)
+    blocked_path_ids: list[str]
+    risk_after: float | None = Field(ge=0)
+    remediation_impact: float | None
+    priority_rank: int | None = Field(ge=1)
+    reason_codes: list[str]
+
+
+class AnalysisResult(_CanonicalModel):
+    schema_version: str
+    dataset_id: str
+    analysis_id: str
+    created_at: AwareDatetime
+    graph_model_version: str
+    risk_model_version: str
+    config_hash: str
+    patched_finding_ids: list[str]
+    target_asset_ids: list[str]
+    ranking_metric: Literal["critical_paths_blocked", "remediation_impact"]
+    risk_score_status: Literal["not_implemented", "complete", "incomplete"]
+    risk_before: float | None = Field(ge=0)
+    baseline_cvss_order: list[str]
+    results: list[PriorityItem]
+    warnings: list[str]

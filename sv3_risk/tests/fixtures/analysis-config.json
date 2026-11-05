@@ -1,0 +1,18 @@
+{
+  "graph_config": {
+    "model_version": "demo-graph-v1",
+    "entry_point_ids": [
+      "INTERNET"
+    ],
+    "target_asset_ids": [
+      "DB01"
+    ],
+    "max_depth": 8,
+    "max_paths": 1000
+  },
+  "risk_config": {
+    "model_version": "blocked-paths-v1",
+    "ranking_metric": "critical_paths_blocked",
+    "parameters": {}
+  }
+}
